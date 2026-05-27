@@ -1,0 +1,18 @@
+[package]
+name = "kv"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Public key-value API for cracked-db"
+
+[dependencies]
+runtime.workspace = true
+storage.workspace = true
+mvcc.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]

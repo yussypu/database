@@ -1,0 +1,19 @@
+[package]
+name = "sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic simulation harness for cracked-db"
+
+[dependencies]
+runtime.workspace = true
+storage.workspace = true
+learned.workspace = true
+mvcc.workspace = true
+kv.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]

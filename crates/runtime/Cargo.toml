@@ -1,0 +1,13 @@
+[package]
+name = "runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic IO abstraction layer for cracked-db"
+
+[dependencies]
+thiserror.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]

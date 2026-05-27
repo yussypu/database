@@ -1,0 +1,21 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "crackeddb"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.2.7", features = ["derive"] }
+sim.workspace = true
+mvcc.workspace = true
+storage.workspace = true
+runtime.workspace = true
+kv.workspace = true
+ctrlc = "3.4"
+
+[dev-dependencies]

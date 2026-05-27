@@ -1,0 +1,21 @@
+[package]
+name = "storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "LSM storage engine for cracked-db"
+
+[dependencies]
+runtime.workspace = true
+learned.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+crc32c.workspace = true
+bincode.workspace = true
+serde.workspace = true
+bytes.workspace = true
+crossbeam-skiplist.workspace = true
+
+[dev-dependencies]
