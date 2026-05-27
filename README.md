@@ -1,4 +1,4 @@
-# crackeddb
+# crackeddb (in development)
 
 An embedded OLTP database where every index is learned, every execution is deterministically replayable, and the core protocols are machine verified.
 
