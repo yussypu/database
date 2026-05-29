@@ -52,8 +52,4 @@ as they get done.
   out silently. add a smoke job that asserts the named acceptance tests
   exist via `cargo test --list | grep` before the acceptance suite runs.
 
-## phase 6 prep
 
-- the cli package name is `cli` but the binary is `crackeddb`. before
-  publishing to crates.io, rename the package to `crackeddb-cli` or
-  `crackeddb`.
