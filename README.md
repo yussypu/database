@@ -148,16 +148,16 @@ Each spec is referenced from the implementation file that realizes it, by name a
 
 Measured against RocksDB (TransactionDB Pessimistic), LMDB (heed, single writer), and sled (transactional) on a Hetzner CCX33: 8 dedicated AMD EPYC cores, 32 GB RAM, 240 GB NVMe. 8 workers, 60 second warmup, 120 second measurement, 3 runs per combination, median reported. Each backend runs in its native durability mode.
 
-crackeddb is slower than the mature engines on every write workload, which is expected. It pays for an fsync on every commit and it is the only backend that actually does the work of detecting serializability conflicts. The number worth reading is the abort column, not the throughput column.
+crackeddb is slower than the mature engines on essentially every workload, and that is expected. The number worth reading is the abort column. crackeddb is the only backend in the comparison that actually tracks read sets and detects rw antidependency cycles at commit time. On read heavy workloads the gap is a per read cost (read set insertion, reader registration, version chain traversal at the snapshot timestamp). On write heavy workloads it is dominated by an fsync on every commit. Both are direct consequences of choices made for correctness, not performance.
 
 TPC-C new order, 1 GB.
 
-| Backend   | Throughput (ops/sec) | p50 (us) | p99 (us) | Aborts  |
-|-----------|---------------------:|---------:|---------:|--------:|
-| crackeddb |                4,173 |    2,255 |    8,684 | 714,685 |
-| rocksdb   |               42,851 |       22 |      767 |      10 |
-| lmdb      |               20,474 |       53 |       69 |       0 |
-| sled      |                9,642 |    1,149 |    1,979 |       0 |
+| Backend   | Throughput (ops/sec) | p50 (us) | p99 (us) | Aborts |
+|-----------|---------------------:|---------:|---------:|-------:|
+| crackeddb |                  417 |   32,255 |   86,847 | 14,685 |
+| rocksdb   |               42,851 |      227 |      671 |      0 |
+| lmdb      |               20,474 |       53 |       69 |      0 |
+| sled      |                9,642 |    1,149 |    1,979 |      0 |
 
 TPC-C new order, 10 GB.
 
@@ -166,21 +166,23 @@ TPC-C new order, 10 GB.
 | crackeddb |                  557 |       7,962 |
 | rocksdb   |               26,244 |           0 |
 | lmdb      |                  446 |  15,768,325 |
-| sled      |  deadlocked, excluded |          n/a |
+| sled      | deadlocked, excluded |         n/a |
 
-crackeddb is the only backend reporting serializability conflicts on a workload designed to produce them. Its throughput stays roughly constant from 1 GB to 10 GB. LMDB's single writer architecture falls apart at 10 GB with 15.7 million aborts.
+The drop in crackeddb aborts from 14,685 at 1 GB to 7,962 at 10 GB is expected: a larger keyspace spreads contention across more warehouses, so per key conflicts get rarer even though absolute throughput stays in the same range. The LMDB 10 GB row is suspect. We hit MDB_MAP_FULL on the YCSB 10 GB runs against LMDB, which means the heed adapter's map size was undersized for our config. The 15.7 million number could be real contention against the single writer, or it could be a map full retry loop. We have not separated them. Treat it as "something is wrong at 10 GB under our LMDB configuration" rather than a statement about LMDB itself.
+
+The sled exclusion at 10 GB is a known upstream issue, not a configuration error. Sled deadlocks under sustained concurrent writes: spacejam/sled#1134 and spacejam/sled#1152.
 
 YCSB, 1 GB scale, crackeddb vs RocksDB.
 
-| Workload        | crackeddb | RocksDB | gap |
-|-----------------|----------:|--------:|----:|
-| C (100% reads)  |   130,257 | 915,064 |  7x |
-| B (95% reads)   |     9,861 | 765,964 | 78x |
-| A (50/50)       |     6,199 | 567,801 | 92x |
+| Workload       | crackeddb | RocksDB |   gap |
+|----------------|----------:|--------:|------:|
+| C (100% reads) |   130,257 | 915,064 |    7x |
+| B (95% reads)  |     9,861 | 765,964 |   78x |
+| A (50/50)      |     6,199 | 567,801 |   92x |
 
-Read throughput is within an order of magnitude of a mature engine. The gap on anything with write traffic is almost entirely the per commit fsync. Group commit would close most of it and is not implemented yet.
+The 7x gap on C is the read path cost, not fsync, since C has no commits. SSI is paying for read set insertion, reader tracker maintenance, and MVCC version chain traversal on every get. RocksDB is not paying those costs because its default TransactionDB locking model does not promote reads to write locks. The gap widens sharply with even small write percentages because the fsync per commit ceiling kicks in. Group commit would close most of the write side gap and is not implemented yet.
 
-Methodology, per backend durability modes, and known failure modes (LMDB MDB_MAP_FULL on 10 GB YCSB, sled deadlock under sustained concurrent writes) are in crates/bench/README.md. Raw results in bench-results.jsonl.
+Methodology, per backend durability modes, and known failure modes (LMDB MDB_MAP_FULL under our config, sled deadlock under sustained concurrent writes) are in crates/bench/README.md. Raw results in crates/bench/results/bench-results.jsonl.
 
 ## Scope
 
@@ -189,8 +191,7 @@ What it is not, stated plainly so the benchmarks are read in context:
 * Not distributed. Single node, embedded.
 * Not SQL. Key value with transactions. A SQL layer is a later problem.
 * Not production. No replication, no online backup, no operational tooling, no client libraries beyond the Rust crate.
-* Not a fast OLTP engine. The fsync per commit ceiling shows up in every write heavy result. Group commit is the obvious next step.
-
+* Not a fast OLTP engine. The fsync per commit ceiling shows up in every write heavy result, and SSI read overhead shows up on pure reads. Group commit is the obvious next step on the write side.
 
 ## Reading
 
