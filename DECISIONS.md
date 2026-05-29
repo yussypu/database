@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This document records architectural decisions made during development. Each entry explains *why* a tradeoff was made, written for someone who joins the project in 18 months.
+This document records architectural decisions made during development. Ongoing doc.
 
 ---
 
