@@ -2930,10 +2930,7 @@ mod crash_tests {
     ///
     /// Runs 1000 crash cycles, each with random operations, and verifies that all
     /// synced writes survive each crash and the database remains consistent.
-    ///
-    /// Ignored by default due to runtime. Run with: --ignored --nocapture
     #[test]
-    #[ignore]
     fn phase1_acceptance_1000_crashes() {
         const CRASH_CYCLES: usize = 1000;
         const SEED: u64 = 0xDEADBEEF;

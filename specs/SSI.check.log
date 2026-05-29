@@ -1,0 +1,41 @@
+TLC2 Version 2026.05.18.174321 (rev: 8ba1027)
+Running breadth-first search Model-Checking with fp 104 and seed -1560114796249003086 with 8 workers on 8 cores with 1820MB heap and 64MB offheap memory [pid: 62763] (Mac OS X 15.3 aarch64, Oracle Corporation 24.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /Users/yahya/database/specs/SSI.tla
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/Integers.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/Sequences.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/FiniteSets.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/TLC.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/_TLCTrace.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/Naturals.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/mg/sk62vdzj35544580q0gv5ml00000gn/T/tlc-5460022362261392220/TLCExt.tla (jar:file:/Users/yahya/database/specs/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module SSI
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module SSI
+Starting... (2026-05-29 23:32:55)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-05-29 23:32:56.
+Progress(8) at 2026-05-29 23:32:59: 222.811 states generated (222.811 s/min), 70.240 distinct states found (70.240 ds/min), 54.817 states left on queue.
+Progress(12) at 2026-05-29 23:33:59: 19.715.751 states generated (19.492.940 s/min), 4.348.004 distinct states found (4.277.764 ds/min), 2.496.108 states left on queue.
+Progress(13) at 2026-05-29 23:34:59: 43.757.277 states generated (24.041.526 s/min), 8.756.551 distinct states found (4.408.547 ds/min), 4.069.405 states left on queue.
+Progress(14) at 2026-05-29 23:35:59: 69.238.256 states generated (25.480.979 s/min), 13.110.928 distinct states found (4.354.377 ds/min), 4.972.324 states left on queue.
+Progress(15) at 2026-05-29 23:36:59: 94.225.146 states generated (24.986.890 s/min), 16.914.487 distinct states found (3.803.559 ds/min), 4.905.817 states left on queue.
+Progress(15) at 2026-05-29 23:37:59: 106.444.643 states generated (12.219.497 s/min), 18.668.194 distinct states found (1.753.707 ds/min), 4.626.372 states left on queue.
+Progress(16) at 2026-05-29 23:38:59: 124.328.064 states generated (17.883.421 s/min), 21.151.610 distinct states found (2.483.416 ds/min), 3.810.502 states left on queue.
+Progress(17) at 2026-05-29 23:39:59: 145.663.737 states generated (21.335.673 s/min), 23.795.546 distinct states found (2.643.936 ds/min), 1.652.974 states left on queue.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 1.7E-4
+  based on the actual fingerprints:  val = 5.8E-5
+152592268 states generated, 24617893 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 19.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 24 and the 95th percentile is 4).
+Finished in 07min 24s at (2026-05-29 23:40:20)

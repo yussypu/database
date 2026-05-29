@@ -139,7 +139,7 @@ runtime/ is the foundation. No crate above it may touch std::time, std::fs, std:
 Two machine checked specs.
 
 * **specs/MVCC.tla.** Transaction begin, read, write, commit, abort. Invariant: snapshot isolation holds.
-* **specs/SSI.tla.** rw antidependency tracking and dangerous structure detection. Invariant: every committed schedule is serializable. Verified across 24.6M distinct states.
+* **specs/SSI.tla.** rw antidependency tracking and dangerous structure detection. Invariant: every committed schedule is serializable. Verified across 24.6M distinct states (see `specs/SSI.check.log`).
 
 Each spec is referenced from the implementation file that realizes it, by name and by action. WAL and recovery correctness is covered empirically rather than by spec: the acceptance test phase1_acceptance_1000_crashes runs 1,000 crash and recovery scenarios under fault injection, and a Storage.tla spec is on the todo list rather than in the repo.
 
