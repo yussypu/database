@@ -2,7 +2,7 @@
 
 An embedded OLTP database written in Rust. It exists to work through one question: how do serializable transactions, deterministic simulation, and formal specification fit together in a single storage engine. It is not finished and it is not meant for production. The interesting parts are the constraints it holds itself to, not the throughput numbers.
 
-Transactions are serializable. The WAL, MVCC, and SSI protocols are specified in TLA+ and machine checked with TLC. Every source of nondeterminism routes through one trait, so a bug found from a seed reproduces byte for byte. Every architectural decision is written down in DECISIONS.md next to the regression test that pins it.
+Transactions are serializable. The MVCC and SSI protocols are specified in TLA+ and machine checked with TLC. Every source of nondeterminism routes through one trait, so a bug found from a seed reproduces byte for byte. Every architectural decision is written down in DECISIONS.md next to the regression test that pins it.
 
 ## Three ideas it puts in one place
 
@@ -10,7 +10,7 @@ Transactions are serializable. The WAL, MVCC, and SSI protocols are specified in
 
 **Deterministic simulation testing.** Clock, file IO, RNG, and scheduling all go through one trait. Under the simulator the database runs single threaded from a seed, so any bug the simulator finds is reproducible exactly and can be shrunk to a minimal failing schedule.
 
-**Formal verification.** The WAL, MVCC, and SSI protocols are specified in TLA+ and checked with TLC. The specs live in the repo and each one is referenced from the implementation file that realizes it.
+**Formal verification.** The MVCC and SSI protocols are specified in TLA+ and checked with TLC. The specs live in the repo and each one is referenced from the implementation file that realizes it.
 
 Roughly the shape of SQLite, with serializable transactions, learned indexes, and a simulation harness bolted on.
 
@@ -93,27 +93,27 @@ use kv::{Db, Options};
 use runtime::{Path, RealEnv};
 
 fn main() -> Result<(), kv::Error> {
-    let db = Db::open(RealEnv::new(), Path::new("/tmp/db"), Options::default())?;
+   let db = Db::open(RealEnv::new(), Path::new("/tmp/db"), Options::default())?;
 
-    let mut txn = db.begin();
-    txn.put(b"alice", b"on")?;
-    txn.put(b"bob", b"on")?;
-    let outcome = txn.commit()?;
-    if outcome.aborted_for_ssi {
-        // retry
-    }
+   let mut txn = db.begin();
+   txn.put(b"alice", b"on")?;
+   txn.put(b"bob", b"on")?;
+   let outcome = txn.commit()?;
+   if outcome.aborted_for_ssi {
+       // retry
+   }
 
-    let mut txn = db.begin();
-    let value = txn.get(b"alice")?;
-    assert_eq!(value.as_deref(), Some(b"on".as_slice()));
+   let mut txn = db.begin();
+   let value = txn.get(b"alice")?;
+   assert_eq!(value.as_deref(), Some(b"on".as_slice()));
 
-    for entry in txn.scan(b"a".as_ref()..b"z".as_ref())? {
-        let (key, val) = entry?;
-        // ...
-    }
-    txn.rollback();
+   for entry in txn.scan(b"a".as_ref()..b"z".as_ref())? {
+       let (key, val) = entry?;
+       // ...
+   }
+   txn.rollback();
 
-    Ok(())
+   Ok(())
 }
 ```
 
@@ -136,13 +136,12 @@ runtime/ is the foundation. No crate above it may touch std::time, std::fs, std:
 
 ## Verification
 
-Three machine checked specs.
+Two machine checked specs.
 
-* **specs/Storage.tla.** WAL append, fsync, crash, recover. Invariant: no acknowledged write is ever lost.
 * **specs/MVCC.tla.** Transaction begin, read, write, commit, abort. Invariant: snapshot isolation holds.
 * **specs/SSI.tla.** rw antidependency tracking and dangerous structure detection. Invariant: every committed schedule is serializable. Verified across 24.6M distinct states.
 
-Each spec is referenced from the implementation file that realizes it, by name and by action.
+Each spec is referenced from the implementation file that realizes it, by name and by action. WAL and recovery correctness is covered empirically rather than by spec: the acceptance test phase1_acceptance_1000_crashes runs 1,000 crash and recovery scenarios under fault injection, and a Storage.tla spec is on the todo list rather than in the repo.
 
 ## Benchmarks
 
