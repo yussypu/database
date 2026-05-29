@@ -85,26 +85,19 @@ impl<E: Env + Clone + 'static> VersionStore<E> {
     /// All writes are committed with the same timestamp.
     /// Writes are persisted to the WAL and memtable.
     /// Caller must ensure no conflicting writes exist (via `has_write_after`).
+    ///
+    /// This method uses group commit to batch the writes into a single WAL
+    /// record and share fsync across concurrent transactions.
     pub fn install_writes(
         &self,
         commit_ts: u64,
         writes: impl IntoIterator<Item = (Bytes, Option<Bytes>)>,
     ) -> StorageResult<()> {
-        for (key, value) in writes {
-            match value {
-                Some(v) => {
-                    self.engine.put_versioned(&key, &v, commit_ts)?;
-                }
-                None => {
-                    // Write a tombstone at the commit_ts
-                    self.engine.delete_versioned(&key, commit_ts)?;
-                }
-            }
-        }
-
-        // Sync WAL to ensure durability
-        self.engine.wal_sync()?;
-        Ok(())
+        // Use batched commit which:
+        // 1. Encodes all writes into a single WAL record
+        // 2. Commits via group commit (shares fsync with other transactions)
+        // 3. Applies to memtable after fsync completes
+        self.engine.put_versioned_batch(commit_ts, writes)
     }
 
     /// Get a reference to the underlying engine.

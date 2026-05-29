@@ -30,14 +30,15 @@ use crate::compaction::{
     FileMetadata, Version,
 };
 use crate::error::{Error, Result};
+use crate::group_commit::{GroupCommitConfig, GroupCommitter, GroupCommitStats};
 use crate::memtable::{InternalKey, LookupResult, Memtable, MemtableConfig, MemtableValue};
 use crate::sstable::{
     decode_internal_key, decode_value, encode_internal_key, encode_value, SSTableBuilder,
     SSTableReader,
 };
-use crate::wal::{WalConfig, WalReader, WalRecord, WalWriter};
+use crate::wal::{WalConfig, WalReader, WalWriter};
 use bytes::Bytes;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use runtime::{Env, File, OpenOptions, Path, PathBuf};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::{BinaryHeap, HashMap};
@@ -81,8 +82,9 @@ pub struct LsmEngine<E: Env + Clone> {
     /// Current version (SSTable layout).
     version: RwLock<Arc<Version>>,
 
-    /// Write-ahead log.
-    wal: Mutex<WalWriter<E>>,
+    /// Group commit manager for WAL (replaces direct WAL access).
+    /// Handles batched commits with pipelined fsync for high throughput.
+    group_committer: GroupCommitter<E>,
 
     /// Next file number for SSTables.
     next_file_num: AtomicU64,
@@ -118,6 +120,11 @@ const WAL_TYPE_TXN_WRITE: u8 = 0x02;
 const WAL_TYPE_TXN_COMMIT: u8 = 0x03;
 const WAL_TYPE_TXN_ABORT: u8 = 0x04;
 
+// Batch record format (for group commit):
+// MAGIC(8 bytes = u64::MAX - 1) + count(4) + [[len:u32][kv_record]]...
+// This allows atomic commit of multiple KV pairs in a single WAL record.
+const WAL_BATCH_MAGIC: u64 = u64::MAX - 1;
+
 /// Decoded WAL record types for recovery.
 #[derive(Debug)]
 enum WalPayload {
@@ -126,6 +133,10 @@ enum WalPayload {
         key: Bytes,
         value: Option<Bytes>,
         seq: u64,
+    },
+    /// Batch of key-value writes (group commit format)
+    Batch {
+        writes: Vec<(Bytes, Option<Bytes>, u64)>, // (key, value, seq/commit_ts)
     },
     /// Transaction begin
     TxnBegin { txn_id: u64 },
@@ -436,6 +447,10 @@ impl<E: Env + Clone> LsmEngine<E> {
         };
         let wal = WalWriter::new(env.clone(), &wal_path, wal_config)?;
 
+        // Create group committer wrapping the WAL
+        let group_commit_config = GroupCommitConfig::default();
+        let group_committer = GroupCommitter::new(env.clone(), wal, group_commit_config);
+
         // Create initial memtable
         let memtable_config = MemtableConfig {
             max_size: config.memtable_size,
@@ -449,7 +464,7 @@ impl<E: Env + Clone> LsmEngine<E> {
             active_memtable: RwLock::new(memtable),
             immutable_memtables: RwLock::new(Vec::new()),
             version: RwLock::new(Arc::new(version)),
-            wal: Mutex::new(wal),
+            group_committer,
             next_file_num: AtomicU64::new(next_file_num),
             next_memtable_id: AtomicU64::new(1),
             sequence: AtomicU64::new(sequence),
@@ -886,14 +901,13 @@ impl<E: Env + Clone> LsmEngine<E> {
     /// Deletes a key at a specific commit timestamp (MVCC tombstone).
     ///
     /// Uses the provided `commit_ts` as the sequence number for the tombstone.
+    /// Note: This method appends to the WAL but does NOT fsync. The caller
+    /// should call `wal_sync()` after all writes in a transaction.
+    /// For batched commits with automatic fsync, use `put_versioned_batch`.
     pub fn delete_versioned(&self, key: &[u8], commit_ts: u64) -> Result<()> {
         // Write tombstone to WAL
         let wal_record = Self::encode_wal_record(key, None, commit_ts);
-        {
-            let mut wal = self.wal.lock();
-            wal.append(&WalRecord::new(wal_record))?;
-            // Note: caller should call wal_sync() after all writes
-        }
+        self.group_committer.append_raw(wal_record)?;
 
         // Write tombstone to memtable with commit_ts as sequence
         let should_flush = {
@@ -913,14 +927,14 @@ impl<E: Env + Clone> LsmEngine<E> {
     ///
     /// Unlike `put()` which uses the engine's internal sequence number,
     /// this uses the provided `commit_ts` as the version identifier.
+    ///
+    /// Note: This method appends to the WAL but does NOT fsync. The caller
+    /// should call `wal_sync()` after all writes in a transaction.
+    /// For batched commits with automatic fsync, use `put_versioned_batch`.
     pub fn put_versioned(&self, key: &[u8], value: &[u8], commit_ts: u64) -> Result<()> {
         // Use commit_ts as the sequence number for this write
         let wal_record = Self::encode_wal_record(key, Some(value), commit_ts);
-        {
-            let mut wal = self.wal.lock();
-            wal.append(&WalRecord::new(wal_record))?;
-            // Note: caller should call wal_sync() after all writes
-        }
+        self.group_committer.append_raw(wal_record)?;
 
         // Write to memtable with commit_ts as sequence
         let should_flush = {
@@ -938,6 +952,106 @@ impl<E: Env + Clone> LsmEngine<E> {
         }
 
         // Update max_commit_ts if needed
+        let mut current = self.max_commit_ts.load(Ordering::SeqCst);
+        while commit_ts > current {
+            match self.max_commit_ts.compare_exchange_weak(
+                current,
+                commit_ts,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(c) => current = c,
+            }
+        }
+
+        // Update sequence to be at least commit_ts + 1
+        let mut current_seq = self.sequence.load(Ordering::SeqCst);
+        while commit_ts >= current_seq {
+            match self.sequence.compare_exchange_weak(
+                current_seq,
+                commit_ts + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(c) => current_seq = c,
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Writes a batch of key-value pairs with a specific commit timestamp, with atomic fsync.
+    ///
+    /// This method:
+    /// 1. Encodes all writes into a single WAL record
+    /// 2. Appends to the shared buffer
+    /// 3. Waits for fsync to complete (via group commit)
+    /// 4. Applies all writes to the memtable
+    ///
+    /// This is the preferred method for transaction commits as it:
+    /// - Reduces lock acquisitions (one instead of per-key)
+    /// - Enables group commit across concurrent transactions
+    /// - Guarantees atomic durability
+    pub fn put_versioned_batch(
+        &self,
+        commit_ts: u64,
+        writes: impl IntoIterator<Item = (Bytes, Option<Bytes>)>,
+    ) -> Result<()> {
+        // Collect writes to encode them into a single batch record
+        let writes_vec: Vec<(Bytes, Option<Bytes>)> = writes.into_iter().collect();
+
+        if writes_vec.is_empty() {
+            return Ok(());
+        }
+
+        // Encode all writes into a single batch record
+        // Format: BATCH_MAGIC(8) + count(4) + [[len:u32][kv_record]]...
+        let mut batch_record = Vec::new();
+
+        // Write batch magic prefix
+        batch_record.extend_from_slice(&WAL_BATCH_MAGIC.to_le_bytes());
+
+        // Write batch count
+        batch_record.extend_from_slice(&(writes_vec.len() as u32).to_le_bytes());
+
+        // Write each entry
+        for (key, value) in &writes_vec {
+            // Encode as individual WAL record format for recovery compatibility
+            let wal_record = match value {
+                Some(v) => Self::encode_wal_record(key, Some(v), commit_ts),
+                None => Self::encode_wal_record(key, None, commit_ts),
+            };
+            // Prefix with length for parsing
+            batch_record.extend_from_slice(&(wal_record.len() as u32).to_le_bytes());
+            batch_record.extend_from_slice(&wal_record);
+        }
+
+        // Commit the batch record with group commit (waits for fsync)
+        self.group_committer.commit_batch(batch_record)?;
+
+        // Now apply all writes to memtable (after durable)
+        let should_flush = {
+            let memtable = self.active_memtable.read();
+            for (key, value) in &writes_vec {
+                match value {
+                    Some(v) => {
+                        memtable.put_with_seq(key.clone(), v.clone(), commit_ts);
+                    }
+                    None => {
+                        memtable.delete_with_seq(key.clone(), commit_ts);
+                    }
+                }
+            }
+            memtable.should_flush()
+        };
+
+        if should_flush {
+            self.rotate_memtable()?;
+        }
+
+        // Update max_commit_ts
         let mut current = self.max_commit_ts.load(Ordering::SeqCst);
         while commit_ts > current {
             match self.max_commit_ts.compare_exchange_weak(
@@ -1034,24 +1148,21 @@ impl<E: Env + Clone> LsmEngine<E> {
     /// Appends a TxnBegin record to the WAL.
     pub fn wal_append_txn_begin(&self, txn_id: u64) -> Result<()> {
         let record = Self::encode_txn_begin_record(txn_id);
-        let mut wal = self.wal.lock();
-        wal.append(&WalRecord::new(record))?;
+        self.group_committer.append_raw(record)?;
         Ok(())
     }
 
     /// Appends a TxnWrite record to the WAL.
     pub fn wal_append_txn_write(&self, txn_id: u64, key: &[u8], value: &[u8]) -> Result<()> {
         let record = Self::encode_txn_write_record(txn_id, key, value);
-        let mut wal = self.wal.lock();
-        wal.append(&WalRecord::new(record))?;
+        self.group_committer.append_raw(record)?;
         Ok(())
     }
 
     /// Appends a TxnCommit record to the WAL.
     pub fn wal_append_txn_commit(&self, txn_id: u64, commit_ts: u64) -> Result<()> {
         let record = Self::encode_txn_commit_record(txn_id, commit_ts);
-        let mut wal = self.wal.lock();
-        wal.append(&WalRecord::new(record))?;
+        self.group_committer.append_raw(record)?;
 
         // Update max values
         let mut current = self.max_txn_id.load(Ordering::SeqCst);
@@ -1086,16 +1197,23 @@ impl<E: Env + Clone> LsmEngine<E> {
     /// Appends a TxnAbort record to the WAL.
     pub fn wal_append_txn_abort(&self, txn_id: u64) -> Result<()> {
         let record = Self::encode_txn_abort_record(txn_id);
-        let mut wal = self.wal.lock();
-        wal.append(&WalRecord::new(record))?;
+        self.group_committer.append_raw(record)?;
         Ok(())
     }
 
     /// Syncs the WAL to disk.
+    ///
+    /// This is now handled through group commit for transaction commits.
+    /// For direct sync (e.g., during shutdown), use this method.
     pub fn wal_sync(&self) -> Result<()> {
-        let mut wal = self.wal.lock();
-        wal.sync()?;
-        Ok(())
+        self.group_committer.sync()
+    }
+
+    /// Returns the group commit statistics.
+    ///
+    /// Use this to monitor commits-per-fsync ratio for performance analysis.
+    pub fn group_commit_stats(&self) -> &GroupCommitStats {
+        &self.group_committer.stats
     }
 
     // Internal methods
@@ -1104,13 +1222,9 @@ impl<E: Env + Clone> LsmEngine<E> {
         // Get next sequence number
         let seq = self.sequence.fetch_add(1, Ordering::SeqCst);
 
-        // Write to WAL first
+        // Write to WAL with group commit
         let wal_record = Self::encode_wal_record(key, value, seq);
-        {
-            let mut wal = self.wal.lock();
-            wal.append(&WalRecord::new(wal_record))?;
-            wal.sync()?;
-        }
+        self.group_committer.commit_batch(wal_record)?;
 
         // Write to memtable
         let should_flush = {
@@ -1413,11 +1527,41 @@ impl<E: Env + Clone> LsmEngine<E> {
             return None;
         }
 
-        // Check if this is a transaction record (first 8 bytes == u64::MAX magic)
-        // or legacy KV record (first 8 bytes are sequence number < u64::MAX)
+        // Check if this is a batch record, transaction record, or legacy KV record
         let first_u64 = u64::from_le_bytes(data[0..8].try_into().ok()?);
 
-        if first_u64 == WAL_TXN_MAGIC {
+        if first_u64 == WAL_BATCH_MAGIC {
+            // Batch record format: MAGIC(8) + count(4) + [[len:u32][kv_record]]...
+            if data.len() < 12 {
+                return None;
+            }
+            let count = u32::from_le_bytes(data[8..12].try_into().ok()?) as usize;
+            let mut writes = Vec::with_capacity(count);
+            let mut offset = 12;
+
+            for _ in 0..count {
+                if offset + 4 > data.len() {
+                    return None;
+                }
+                let record_len = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+                offset += 4;
+
+                if offset + record_len > data.len() {
+                    return None;
+                }
+                let record_data = &data[offset..offset + record_len];
+                offset += record_len;
+
+                // Decode individual KV record
+                if let Some((key, value, seq)) = Self::decode_wal_record(record_data) {
+                    writes.push((key, value, seq));
+                } else {
+                    return None; // Corrupted batch
+                }
+            }
+
+            Some(WalPayload::Batch { writes })
+        } else if first_u64 == WAL_TXN_MAGIC {
             // Transaction record format: MAGIC(8) + type(1) + payload
             if data.len() < 9 {
                 return None;
@@ -1549,6 +1693,22 @@ impl<E: Env + Clone> LsmEngine<E> {
                         match value {
                             Some(v) => memtable.put_with_seq(key, v, seq),
                             None => memtable.delete_with_seq(key, seq),
+                        }
+                    }
+                    WalPayload::Batch { writes } => {
+                        // Batch record from group commit - replay all writes
+                        let memtable = self.active_memtable.read();
+                        for (key, value, seq) in writes {
+                            if seq > max_seq {
+                                max_seq = seq;
+                            }
+                            if seq > max_commit_ts {
+                                max_commit_ts = seq;
+                            }
+                            match value {
+                                Some(v) => memtable.put_with_seq(key, v, seq),
+                                None => memtable.delete_with_seq(key, seq),
+                            }
                         }
                     }
                     WalPayload::TxnBegin { txn_id } => {
