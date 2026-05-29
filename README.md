@@ -191,17 +191,6 @@ What it is not, stated plainly so the benchmarks are read in context:
 * Not production. No replication, no online backup, no operational tooling, no client libraries beyond the Rust crate.
 * Not a fast OLTP engine. The fsync per commit ceiling shows up in every write heavy result. Group commit is the obvious next step.
 
-## Status
-
-In development. v1 is reached when:
-
-* All seven crates are feature complete and documented.
-* All three TLA+ specs run in CI on every PR.
-* The simulator runs 1M+ seeds nightly with no invariant violation.
-* Group commit lands and the YCSB write gap closes to something defensible.
-* Recovery passes the full fault injection matrix at 10 GB scale.
-
-Until then, breaking changes happen freely. The verification commitments do not.
 
 ## Reading
 
