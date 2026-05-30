@@ -33,7 +33,7 @@ rocksdb     T1=ok  T2=ok
 rocksdb     alice=off  bob=off  VIOLATED
 ```
 
-Same scenario, two databases, side by side. RocksDB's TransactionDB uses pessimistic locking to catch conflicting writes, but it does not track rw antidependencies and does not offer a serializable isolation level, so it commits both transactions and lands in a state no serial schedule could produce. This is not a RocksDB bug. Write skew is a known anomaly under snapshot isolation and weaker levels, and detecting it is exactly what SSI adds on top. crackeddb detects the rw antidependency cycle at commit time and aborts one transaction, so the invariant holds. Reproducible 5 of 5 across runs. Source: crates/bench/src/bin/write_skew_demo.rs.
+Same scenario, two databases, side by side. RocksDB's TransactionDB uses pessimistic locking to catch conflicting writes, but it does not track rw antidependencies and does not offer a serializable isolation level, so it commits both transactions and lands in a state no serial schedule could produce. This is not a RocksDB bug. Write skew is a known anomaly under snapshot isolation and weaker levels, and detecting it is exactly what SSI adds on top. crackeddb detects the rw antidependency cycle at commit time and aborts one transaction, so the invariant holds. Because the two transactions race, which one is aborted varies between runs; that the invariant holds does not. Reproducible 5 of 5 across runs. Source: crates/bench/src/bin/write_skew_demo.rs.
 
 ## Bugs the simulator caught
 
@@ -73,7 +73,7 @@ on
 [txn t2]> use t1
 [txn t1]> put alice off
 [txn t1]> commit
-ok ts=4
+ok ts=5
 [txn t2]> put alice updated
 [txn t2]> commit
 aborted_for_ssi (retry the operation)
