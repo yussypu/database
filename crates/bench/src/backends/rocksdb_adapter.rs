@@ -1,10 +1,12 @@
 //! RocksDB backend adapter.
 //!
-//! Wraps rocksdb::TransactionDB with pessimistic transactions (strongest serializable mode).
+//! Wraps rocksdb::TransactionDB with pessimistic transactions.
 //!
 //! # Transaction Mode
 //! - Pessimistic locking via TransactionDB
 //! - Write-write conflicts detected at lock acquisition time
+//! - No set_snapshot, so reads are read-committed; read-write antidependencies
+//!   are not tracked, so this is not serializable (write skew is permitted)
 //! - Commits may fail with "Resource busy" or "Deadlock" on conflict
 //!
 //! # Durability

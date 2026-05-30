@@ -33,7 +33,7 @@ rocksdb     T1=ok  T2=ok
 rocksdb     alice=off  bob=off  VIOLATED
 ```
 
-Same scenario, two databases, side by side. RocksDB in its strongest serializable mode (TransactionDB Pessimistic) commits both transactions and lands in a state no serial schedule could produce. crackeddb detects the rw antidependency cycle at commit time and aborts one transaction, so the invariant holds. Reproducible 5 of 5 across runs. Source: crates/bench/src/bin/write_skew_demo.rs.
+Same scenario, two databases, side by side. RocksDB's TransactionDB uses pessimistic locking to catch conflicting writes, but it does not track rw antidependencies and does not offer a serializable isolation level, so it commits both transactions and lands in a state no serial schedule could produce. This is not a RocksDB bug. Write skew is a known anomaly under snapshot isolation and weaker levels, and detecting it is exactly what SSI adds on top. crackeddb detects the rw antidependency cycle at commit time and aborts one transaction, so the invariant holds. Reproducible 5 of 5 across runs. Source: crates/bench/src/bin/write_skew_demo.rs.
 
 ## Bugs the simulator caught
 
@@ -41,7 +41,7 @@ Each of these came out of the simulator and has a permanent regression test. The
 
 * **ADR-007.** A tombstone in L0 failed to suppress an older L1 value after compaction. Seed 0xDEADBEEF, cycle 185. Test: tombstone_regression_seed_0xdeadbeef_cycle_185.
 * **ADR-023.** The SSI timestamp counter was not synced after crash recovery, so the next transaction could commit at a timestamp earlier than a committed predecessor.
-* **ADR-026.** A WAL transaction record magic prefix collided with legacy single key records during recovery.
+* **ADR-026.** A WAL magic prefix could collide between transaction records and legacy single key records during recovery, fixed in the recovery decoder. The transaction record format is defined, encoded, and decoded, but it is not currently emitted on the SSI commit path, which persists batch records instead. The decoder that resolves the collision is exercised by tests rather than on the live write path. See ADR-025 and ADR-026 in DECISIONS.md.
 * **ADR-025.** Stage 5b's MVCC and storage integration was reported done but never shipped. Caught in a verification audit, redone, and documented as a meta receipt so the failure mode is on record.
 
 Each ADR records the bug, the fix, and the property the regression test checks. Full history in DECISIONS.md.
