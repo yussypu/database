@@ -915,21 +915,71 @@ mod tests {
         let mut reader =
             WalReader::new_from_start(env.clone(), &wal_path).expect("Should open WAL reader");
 
-        // Count records and track keys found
+        // Count records and track keys found.
+        //
+        // SSI commits persist writes via `Engine::put_versioned_batch`, which
+        // emits a group-commit BATCH record, not a legacy single-key record.
+        // Byte layout (source of truth: crates/storage/src/engine.rs):
+        //
+        //   BATCH record (`put_versioned_batch`, ~line 1014):
+        //     magic(8, u64 LE = u64::MAX - 1) + count(4, u32 LE)
+        //       + count * [ inner_len(4, u32 LE) + inner KV record ]
+        //
+        //   inner KV record (`encode_wal_record`, ~line 1425):
+        //     seq(8) + key_len(4, u32 LE) + key + type(1)
+        //       + (if Put) value_len(4, u32 LE) + value
+        //
+        // The magic constant is private to engine.rs; mirrored here and kept in
+        // sync with engine.rs (WAL_BATCH_MAGIC, line 126).
+        const WAL_BATCH_MAGIC: u64 = u64::MAX - 1;
+
+        // Decode the key out of a single inner KV record (the format produced
+        // by `encode_wal_record`).
+        fn kv_record_key(rec: &[u8]) -> Option<String> {
+            if rec.len() < 12 {
+                return None;
+            }
+            // bytes 0..8 = seq, bytes 8..12 = key_len.
+            let key_len = u32::from_le_bytes(rec[8..12].try_into().ok()?) as usize;
+            let key_end = 12 + key_len;
+            if rec.len() < key_end {
+                return None;
+            }
+            Some(String::from_utf8_lossy(&rec[12..key_end]).to_string())
+        }
+
         let mut keys_found = std::collections::HashSet::new();
 
         while let Ok(Some(record)) = reader.read_record() {
-            // The WAL record is encoded with our engine's format
-            // Legacy KV format: seq(8) + key_len(4) + key + type(1) + [value_len(4) + value]
-            if record.data.len() >= 12 {
-                // Skip first 8 bytes (sequence number)
-                let key_len =
-                    u32::from_le_bytes(record.data[8..12].try_into().unwrap_or([0; 4])) as usize;
+            let data = &record.data;
 
-                if record.data.len() >= 12 + key_len {
-                    let key = String::from_utf8_lossy(&record.data[12..12 + key_len]);
-                    keys_found.insert(key.to_string());
+            // A batch record needs at least magic(8) + count(4).
+            if data.len() < 12 {
+                continue;
+            }
+
+            // Skip anything that is not a batch record.
+            let magic = u64::from_le_bytes(data[0..8].try_into().unwrap());
+            if magic != WAL_BATCH_MAGIC {
+                continue;
+            }
+
+            let count = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+            let mut offset = 12;
+            for _ in 0..count {
+                if offset + 4 > data.len() {
+                    break;
                 }
+                let inner_len =
+                    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
+                if offset + inner_len > data.len() {
+                    break;
+                }
+                if let Some(key) = kv_record_key(&data[offset..offset + inner_len]) {
+                    keys_found.insert(key);
+                }
+                offset += inner_len;
             }
         }
 

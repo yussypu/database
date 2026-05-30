@@ -910,6 +910,29 @@ MVCCStorage.tla models WAL_BEGIN and WAL_ABORT records as explicit actions. The 
 
 Both optimizations preserve correctness. The spec is intentionally more general than the code. Future spec refinement may make this explicit by adding an optimized variant of MVCCStorage.tla, but for now the gap is documented here.
 
+### Implementation note (added during pre-publish audit)
+
+The decisions above describe the target design. The actual shipped
+implementation diverges in one place: SSI commit routes writes through
+Engine::put_versioned_batch (group commit, batch record format) rather
+than through the dedicated wal_append_txn_* functions described above.
+The transaction record format (TxnBegin, TxnWrite, TxnCommit, TxnAbort,
+covered in ADR-026) is defined, encoded, and decoded correctly by the
+recovery path, but is not currently emitted on the SSI commit hot path.
+Durability and crash recovery are preserved because batch records go
+through fsync identically and recovery applies their inner KV records
+to memtable with the correct commit timestamps.
+
+The transaction record path remains in the code as designed infrastructure
+for future use (e.g., enabling per transaction WAL inspection or
+distinguishing transactions in recovery). Wiring SSI commit to it is
+straightforward and deferred.
+
+The ssi_commit_writes_wal_records regression test parses the actual batch
+format and verifies that committed keys land in the WAL. The test would
+still catch a Stage 5 style regression where commits do not reach the WAL
+at all.
+
 ---
 
 ## ADR-026: WAL Magic Prefix for Transaction Records
@@ -1003,6 +1026,16 @@ The `ssi_commit_writes_wal_records` test verifies:
 1. Transaction records are written to WAL with magic prefix
 2. Recovery correctly parses and replays transaction records
 3. max_commit_ts and max_txn_id are restored from WAL
+
+### Implementation status (added during pre-publish audit)
+
+The magic prefix mechanism is implemented and the recovery decoder handles
+transaction records correctly. However, the current SSI commit path emits
+batch records (WAL_BATCH_MAGIC = u64::MAX - 1) rather than transaction
+records (WAL_TXN_MAGIC = u64::MAX). The disambiguation between the two
+magic values, and between either and legacy KV records, is exercised in
+unit tests but not in the current production write path. See ADR-025
+implementation note.
 
 ---
 
